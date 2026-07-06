@@ -9,6 +9,7 @@ import "./style.css";
 import { InkCanvas } from "./canvas";
 import { RiddleWriter } from "./writer";
 import { PresenceInk } from "./presence";
+import { Signature } from "./signature";
 
 const IDLE_MS = 4200; // ペンが離れてから「書き終わり」とみなすまで。
 // 短すぎると、書いてる途中で少し考えただけで AI 判定が走り、次のストローク開始と
@@ -24,6 +25,9 @@ const page = document.getElementById("page")!;
 const presence = document.getElementById("presence")!;
 const presenceInk = new PresenceInk(
   document.getElementById("presence-ink") as HTMLCanvasElement,
+);
+const signature = new Signature(
+  document.getElementById("presence-sign") as HTMLCanvasElement,
 );
 const ink = new InkCanvas(document.getElementById("ink") as HTMLCanvasElement);
 
@@ -129,10 +133,15 @@ async function possess(result: { transcript: string; reply: string }) {
   possessed = true;
   page.classList.add("locked");
   cancelJudge();
+  hidePresence(); // 気配(渦)は役目を終えて紙の奥へ引いていく
 
   await new Promise((r) => setTimeout(r, 500)); // 一拍の間
   await ink.fadeOut(); // 書いたものが紙に吸い込まれる
-  await new Promise((r) => setTimeout(r, 700));
+  await new Promise((r) => setTimeout(r, 600));
+
+  // 気配が消えた静けさの中で、トムが正体を明かすように署名する
+  await signature.write();
+  await new Promise((r) => setTimeout(r, 400));
 
   await writer.write(result.reply); // 誰かがペンで書いているように
 
@@ -140,7 +149,8 @@ async function possess(result: { transcript: string; reply: string }) {
   if (history.length > 12) history.splice(0, history.length - 12);
 
   await new Promise((r) => setTimeout(r, REPLY_LINGER_MS));
-  await writer.fadeOut(); // トムの文字もまたインクへ還る
+  // トムの文字も署名も、またインクへ還る
+  await Promise.all([writer.fadeOut(), signature.fadeOut()]);
 
   page.classList.remove("locked");
   possessed = false;

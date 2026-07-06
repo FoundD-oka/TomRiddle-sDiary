@@ -83,6 +83,18 @@ body {
   visibility: hidden;
 }
 
+/* トムの署名「T. M. Riddle」。返事確定時に右下へ手書きで浮かぶ。 */
+#presence-sign {
+  position: absolute;
+  right: 4%;
+  bottom: 6%;
+  width: 240px;
+  height: 90px;
+  display: block;
+  pointer-events: none;
+  visibility: hidden;
+}
+
 /* 流体が使えない環境向けフォールバックの点 */
 #presence {
   position: absolute;

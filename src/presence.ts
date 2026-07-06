@@ -8,7 +8,9 @@ const INK = [0.149, 0.208, 0.361]; // #26355c
 const INK_ABSORB = [1.85, 1.47, 0.81];
 
 // 「渦」パターンの振り付け。cycle ごとに再注入して気配を持続させる。
-const CYCLE = 3.6; // 秒: この間隔で渦へ墨を注ぎ足す
+const CYCLE = 6.0; // 秒: この間隔で渦へ墨を注ぎ足す(長め=落ち着いた気配)
+const START_DELAY = 550; // ミリ秒: 判定開始からこの分だけ遅れて渦が出はじめる
+const TIME_SCALE = 0.62; // 流体の進みを遅くして、ゆったり渦巻かせる
 interface SplatEvent {
   t: number; x: number; y: number; ang: number; fmul: number; r: number; ink?: number;
 }
@@ -157,8 +159,8 @@ export class PresenceInk {
 
   private config = {
     SIM_RES: 56, DYE_RES: 240, DENSITY_DISSIPATION: 0.34, VELOCITY_DISSIPATION: 0.25,
-    PRESSURE: 0.8, PRESSURE_ITERATIONS: 20, CURL: 44, SPLAT_RADIUS: 0.0030,
-    SPLAT_FORCE: 4200, INK: 1.15,
+    PRESSURE: 0.8, PRESSURE_ITERATIONS: 20, CURL: 40, SPLAT_RADIUS: 0.0030,
+    SPLAT_FORCE: 3800, INK: 1.15,
   };
 
   private state: "idle" | "active" | "fading" = "idle";
@@ -168,6 +170,8 @@ export class PresenceInk {
   private fired = new Set<number>();
   private fadeUntil = 0;
   private globalAlpha = 0;
+  private begun = false;   // 遅延後、実際に渦を出し始めたか
+  private beginAt = 0;     // 渦を出し始める時刻
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -386,46 +390,58 @@ export class PresenceInk {
     }
   }
 
-  /** 気配を出す(判定リクエスト開始時) */
+  /** 気配を出す(判定リクエスト開始時)。少し遅れて渦が出はじめる。 */
   start() {
     if (!this.available) return;
-    if (this.state === "idle") { this.rinse(); this.globalAlpha = 0; }
+    if (this.state === "idle") { this.rinse(); this.globalAlpha = 0; this.begun = false; }
     this.state = "active";
-    this.cycleStart = performance.now();
+    this.beginAt = performance.now() + START_DELAY;
     this.fired.clear();
-    this.canvas.style.visibility = "visible";
     if (!this.raf) { this.last = performance.now(); this.raf = requestAnimationFrame(this.loop); }
   }
   /** 気配を消す(判定完了・返事開始時) */
   stop() {
     if (!this.available || this.state === "idle") return;
+    if (!this.begun) {
+      // まだ遅延中で渦を出していない → 何も見せずに終了(一瞬の判定でチラつかせない)
+      this.state = "idle";
+      this.canvas.style.visibility = "hidden";
+      if (this.raf) { cancelAnimationFrame(this.raf); this.raf = 0; }
+      return;
+    }
     this.state = "fading";
-    this.fadeUntil = performance.now() + 1400;
+    this.fadeUntil = performance.now() + 1600;
     this.config.DENSITY_DISSIPATION = 2.6; // 墨を早く紙へ引かせる
   }
 
   private loop = (now: number) => {
     let dt = (now - this.last) / 1000; dt = Math.min(dt, 1 / 60); this.last = now;
-    const c = this.config;
 
     if (this.state === "active") {
-      this.globalAlpha = Math.min(1, this.globalAlpha + dt / 0.6); // 0.6秒で出現
+      if (!this.begun) {
+        if (now < this.beginAt) { this.raf = requestAnimationFrame(this.loop); return; }
+        this.begun = true;
+        this.cycleStart = now;
+        this.canvas.style.visibility = "visible";
+      }
+      this.globalAlpha = Math.min(1, this.globalAlpha + dt / 1.1); // 1.1秒でゆっくり出現
       let lt = (now - this.cycleStart) / 1000;
       if (lt >= CYCLE) { this.cycleStart = now; this.fired.clear(); lt = 0; }
       for (let i = 0; i < VORTEX.length; i++) {
         if (!this.fired.has(i) && lt >= VORTEX[i].t) { this.fired.add(i); this.splat(VORTEX[i]); }
       }
-      this.step(dt);
+      this.step(dt * TIME_SCALE);
       this.render();
     } else if (this.state === "fading") {
       this.globalAlpha = Math.max(0, this.globalAlpha - dt / 0.9); // 0.9秒で消える
-      this.step(dt);
+      this.step(dt * TIME_SCALE);
       this.render();
       if (now >= this.fadeUntil) {
         this.state = "idle";
         this.config.DENSITY_DISSIPATION = 0.34;
         this.rinse();
         this.globalAlpha = 0;
+        this.begun = false;
         this.canvas.style.visibility = "hidden";
         cancelAnimationFrame(this.raf); this.raf = 0;
         return;
