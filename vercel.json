@@ -1,0 +1,8 @@
+{
+  "framework": "vite",
+  "functions": {
+    "api/riddle.js": {
+      "maxDuration": 30
+    }
+  }
+}
