@@ -74,10 +74,10 @@ body {
    判定リクエスト中だけ、右下の隅で小さく渦巻く。 */
 #presence-ink {
   position: absolute;
-  right: 3%;
-  bottom: 4%;
-  width: 132px;
-  height: 132px;
+  right: 2%;
+  bottom: 3%;
+  width: 196px;
+  height: 196px;
   display: block;
   pointer-events: none;
   visibility: hidden;
@@ -88,8 +88,8 @@ body {
   position: absolute;
   right: 4%;
   bottom: 6%;
-  width: 240px;
-  height: 90px;
+  width: 120px;
+  height: 46px;
   display: block;
   pointer-events: none;
   visibility: hidden;

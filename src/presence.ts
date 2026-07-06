@@ -126,9 +126,11 @@ void main(){
   vec3 density = texture(uTexture, vUv).rgb;
   float d = (density.r + density.g + density.b) * 0.3333;
   float a = clamp(1.0 - exp(-d * 2.0), 0.0, 1.0);
-  // 四角い縁で墨が切れないよう、外周へ向けて柔らかく減衰(ビネット)
+  // 四角い縁で墨が切れないよう、枠の内側でしっかり消えるビネット
+  // (拡大した枠の中に墨が収まり、縁で処理が切れて見えないようにする)
   vec2 m = abs(vUv - 0.5);
-  float edge = (1.0 - smoothstep(0.24, 0.48, m.x)) * (1.0 - smoothstep(0.24, 0.48, m.y));
+  float edge = (1.0 - smoothstep(0.15, 0.40, m.x)) * (1.0 - smoothstep(0.15, 0.40, m.y));
+  edge *= 1.0 - smoothstep(0.30, 0.48, length(m)); // 角も丸く落とす
   a *= edge * globalAlpha;
   fragColor = vec4(ink * a, a);
 }`;
