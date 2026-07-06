@@ -22,9 +22,20 @@ export class InkCanvas {
   private activePointerId: number | null = null;
   private dpr = 1;
   private lastP = 0.5;
+  // キャンバスの画面上の位置。点ごとに測り直すとレイアウト再計算が連発して
+  // 描画がカクつくので、ストローク開始時とリサイズ時にだけ更新してキャッシュする。
+  private rect: DOMRect | null = null;
+  // ストローク開始のたびに増える。AI判定のキャプチャ中に新しい入力が
+  // 始まったかどうかを main.ts 側が検知するための版数。
+  inputRevision = 0;
 
   onStrokeStart: (() => void) | null = null;
   onStrokeEnd: (() => void) | null = null;
+
+  /** いまペンが接地して描画中か（AI判定を割り込ませないための判定に使う） */
+  get isDrawing(): boolean {
+    return this.current !== null;
+  }
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -48,6 +59,7 @@ export class InkCanvas {
     if (w === 0 || h === 0) return;
     this.canvas.width = w * this.dpr;
     this.canvas.height = h * this.dpr;
+    this.rect = this.canvas.getBoundingClientRect();
     this.redraw();
   }
 
@@ -63,7 +75,9 @@ export class InkCanvas {
   }
 
   private ptOf(e: PointerEvent): Point {
-    const rect = this.canvas.getBoundingClientRect();
+    // キャッシュ済みの rect を使う。点ごとに getBoundingClientRect を呼ぶと
+    // レイアウト再計算が連発してストロークがカクつくため。
+    const rect = this.rect ?? (this.rect = this.canvas.getBoundingClientRect());
     return {
       x: e.clientX - rect.left,
       y: e.clientY - rect.top,
@@ -89,6 +103,9 @@ export class InkCanvas {
     if (!this.accepts(e)) return;
     if (this.activePointerId !== null) return;
     e.preventDefault();
+    // ストローク開始時に一度だけ位置を測り直す（以降は点ごとにキャッシュを使う）。
+    this.rect = this.canvas.getBoundingClientRect();
+    this.inputRevision++;
     this.activePointerId = e.pointerId;
     try {
       this.canvas.setPointerCapture(e.pointerId);
@@ -334,7 +351,8 @@ export class InkCanvas {
     });
   }
 
-  capture(): string {
+  /** 書かれたインクを白背景のオフスクリーンキャンバスに焼き込む。 */
+  private buildCaptureCanvas(): HTMLCanvasElement {
     const pad = 24;
     let minX = Infinity,
       minY = Infinity,
@@ -365,7 +383,29 @@ export class InkCanvas {
     ctx.scale(scale, scale);
     ctx.translate(-minX, -minY);
     for (const s of this.strokes) this.drawStrokeCurve(ctx, s, 1);
+    return off;
+  }
 
-    return off.toDataURL("image/png").split(",")[1];
+  /**
+   * インクを PNG base64 で書き出す非同期版。
+   * toDataURL は画像全体を同期でメモリ上の文字列にエンコードするため、
+   * 書いている最中に走ると UI スレッドが固まってストロークがつっかえる。
+   * toBlob + FileReader なら重いエンコードがメインスレッドをブロックしない。
+   */
+  captureAsync(): Promise<string> {
+    const off = this.buildCaptureCanvas();
+    return new Promise((resolve, reject) => {
+      off.toBlob((blob) => {
+        if (!blob) {
+          reject(new Error("toBlob returned null"));
+          return;
+        }
+        const fr = new FileReader();
+        fr.onload = () =>
+          resolve((fr.result as string).split(",")[1]);
+        fr.onerror = () => reject(fr.error ?? new Error("FileReader failed"));
+        fr.readAsDataURL(blob);
+      }, "image/png");
+    });
   }
 }

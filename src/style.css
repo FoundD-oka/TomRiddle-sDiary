@@ -70,7 +70,20 @@ body {
   transition: opacity 0.35s ease;
 }
 
-/* トムが「読んでいる」気配。判定リクエスト中だけ、隅でかすかに揺れるにじみ */
+/* トムが「読んでいる」気配 — 水に落ちた墨が渦を巻く流体(WebGL2)。
+   判定リクエスト中だけ、右下の隅で小さく渦巻く。 */
+#presence-ink {
+  position: absolute;
+  right: 3%;
+  bottom: 4%;
+  width: 132px;
+  height: 132px;
+  display: block;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+/* 流体が使えない環境向けフォールバックの点 */
 #presence {
   position: absolute;
   right: 6%;

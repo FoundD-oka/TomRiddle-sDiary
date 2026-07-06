@@ -13,6 +13,13 @@ const INK_POOL_R = 1.4;
 
 const strokeCache = new Map<string, string[] | null>();
 
+interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 async function loadStrokePaths(ch: string): Promise<string[] | null> {
   const cached = strokeCache.get(ch);
   if (cached !== undefined) return cached;
@@ -76,57 +83,88 @@ export class RiddleWriter {
     const baseSize = Math.min(Math.max(W * 0.044, 28), 50);
 
     const chunks = splitChunks(text);
-    let cursorY = H * 0.13;
+    // 既に文字を置いた領域。新しい文節はここと重ならない場所を探して置く。
+    const occupied: Rect[] = [];
 
     for (let ci = 0; ci < chunks.length; ci++) {
       const chunk = chunks[ci];
       const sz = baseSize * (0.82 + Math.random() * 0.36);
       const angle = (Math.random() - 0.5) * 14;
-      const rad = (angle * Math.PI) / 180;
-      const cosA = Math.cos(rad);
-      const sinA = Math.sin(rad);
-      const lineH = sz * 1.55;
+      const lineH = sz * 1.5;
+      // ブロック内の折り返し幅。文節が短ければ1行に収まる。
+      const blockMaxW = Math.min(W * 0.6, sz * 1.04 * Math.max(chunk.length, 1));
 
-      let x = W * (0.06 + Math.random() * 0.32);
-      let y = cursorY;
-      const maxX = W * 0.91;
-
+      // 1) 文節内のグリフをローカル座標でレイアウトする。
+      //    横方向にだけ進め、行末で折り返す（縦流れは起こさない）。
+      const glyphs: { ch: string; lx: number; ly: number; rot: number }[] = [];
+      let lx = 0;
+      let ly = 0;
       for (const ch of chunk) {
         if (ch === " " || ch === "　") {
-          const adv = sz * (ch === " " ? 0.4 : 0.9);
-          x += adv * cosA;
-          y += adv * sinA;
+          lx += sz * (ch === " " ? 0.4 : 0.9);
           continue;
         }
-
-        if (x + sz > maxX) {
-          x = W * (0.06 + Math.random() * 0.12);
-          y += lineH;
+        if (lx + sz > blockMaxW && lx > 0) {
+          lx = 0;
+          ly += lineH;
         }
+        const rot = (Math.random() - 0.5) * 5;
+        const jY = (Math.random() - 0.5) * sz * 0.06;
+        glyphs.push({ ch, lx, ly: ly + jY, rot });
+        lx += sz * 1.04;
+      }
+      if (glyphs.length === 0) continue;
 
-        const paths = await loadStrokePaths(ch);
-        const rot = angle + (Math.random() - 0.5) * 2.5;
-        const jY = (Math.random() - 0.5) * sz * 0.04;
+      // 2) ブロックのローカル外接サイズ（回転ぶんの余白 m 込み）。
+      const m = sz * 0.25;
+      let rawW = 0;
+      let rawH = 0;
+      for (const g of glyphs) {
+        rawW = Math.max(rawW, g.lx + sz);
+        rawH = Math.max(rawH, g.ly + sz);
+      }
+      const bw = rawW + m;
+      const bh = rawH + m;
 
+      // 3) angle で回転させたときの軸並行外接矩形（AABB）。被り判定はこの矩形で行う。
+      const rad = (angle * Math.PI) / 180;
+      const aabbW = Math.abs(bw * Math.cos(rad)) + Math.abs(bh * Math.sin(rad));
+      const aabbH = Math.abs(bw * Math.sin(rad)) + Math.abs(bh * Math.cos(rad));
+
+      // 4) 既存の文字と重ならない置き場所を探す（散らし配置は保ちつつ被りだけ回避）。
+      const spot = this.findSpot(aabbW, aabbH, W, H, occupied);
+      occupied.push({ x: spot.x, y: spot.y, w: aabbW, h: aabbH });
+
+      // 5) ブロック用コンテナを AABB の中心に置き、その中心まわりに angle 回転させる。
+      const cx = spot.x + aabbW / 2;
+      const cy = spot.y + aabbH / 2;
+      const container = document.createElement("div");
+      container.style.position = "absolute";
+      container.style.left = `${cx - bw / 2}px`;
+      container.style.top = `${cy - bh / 2}px`;
+      container.style.width = `${bw}px`;
+      container.style.height = `${bh}px`;
+      container.style.transformOrigin = "center";
+      container.style.transform = `rotate(${angle}deg)`;
+      this.layer.appendChild(container);
+      this.elements.push(container);
+
+      // 6) コンテナ内に 1 画ずつ書いていく（見た目の演出は従来どおり）。
+      for (const g of glyphs) {
+        const paths = await loadStrokePaths(g.ch);
         if (paths) {
-          await this.writeChar(paths, x, y + jY, sz, rot);
+          await this.writeChar(container, paths, g.lx + m / 2, g.ly + m / 2, sz, g.rot);
         } else {
-          this.writeFallbackChar(ch, x, y + jY, sz, rot);
+          this.writeFallbackChar(container, g.ch, g.lx + m / 2, g.ly + m / 2, sz, g.rot);
           await sleep(140);
         }
 
-        const adv = sz * 1.02;
-        x += adv * cosA;
-        y += adv * sinA;
-
-        if ("、。？！…?!".includes(ch)) {
+        if ("、。？！…?!".includes(g.ch)) {
           await sleep(280);
         } else {
           await sleep(40);
         }
       }
-
-      cursorY = y + lineH * (0.5 + Math.random() * 0.9);
 
       if (ci < chunks.length - 1) {
         await sleep(320);
@@ -134,7 +172,66 @@ export class RiddleWriter {
     }
   }
 
+  /**
+   * w×h のブロックを、既存の occupied 矩形と重ならない位置に置くための左上座標を探す。
+   * ランダムに候補を投げて、被りゼロの場所が見つかればそこ。
+   * 見つからなければ既存の一番下に積み、それも無理なら最も被りの少ない候補を返す。
+   */
+  private findSpot(
+    w: number,
+    h: number,
+    W: number,
+    H: number,
+    occupied: Rect[],
+  ): { x: number; y: number } {
+    const pad = Math.min(W, H) * 0.02;
+    const minX = W * 0.04;
+    const minY = H * 0.08;
+    const maxX = Math.max(minX, W * 0.96 - w);
+    const maxY = Math.max(minY, H * 0.94 - h);
+
+    let best: { x: number; y: number } | null = null;
+    let bestOverlap = Infinity;
+
+    for (let i = 0; i < 60; i++) {
+      const x = minX + Math.random() * (maxX - minX);
+      const y = minY + Math.random() * (maxY - minY);
+      const ov = this.overlapArea({ x, y, w, h }, occupied, pad);
+      if (ov === 0) return { x, y };
+      if (ov < bestOverlap) {
+        bestOverlap = ov;
+        best = { x, y };
+      }
+    }
+
+    // 空きが見つからないときは既存の一番下より下に積む。
+    let lowest = minY;
+    for (const r of occupied) lowest = Math.max(lowest, r.y + r.h + pad);
+    if (lowest + h <= H * 0.98) {
+      return { x: minX + Math.random() * (maxX - minX), y: lowest };
+    }
+    return best ?? { x: minX, y: minY };
+  }
+
+  /** r と occupied 各矩形の重なり面積の合計（pad ぶん膨らませて余白も確保）。 */
+  private overlapArea(r: Rect, occupied: Rect[], pad: number): number {
+    let total = 0;
+    for (const o of occupied) {
+      const ix = Math.max(
+        0,
+        Math.min(r.x + r.w, o.x + o.w + pad) - Math.max(r.x, o.x - pad),
+      );
+      const iy = Math.max(
+        0,
+        Math.min(r.y + r.h, o.y + o.h + pad) - Math.max(r.y, o.y - pad),
+      );
+      total += ix * iy;
+    }
+    return total;
+  }
+
   private async writeChar(
+    parent: HTMLElement,
     pathDs: string[],
     x: number,
     y: number,
@@ -151,8 +248,7 @@ export class RiddleWriter {
     svg.style.left = `${x}px`;
     svg.style.top = `${y}px`;
     svg.style.transform = `rotate(${rotate}deg)`;
-    this.layer.appendChild(svg);
-    this.elements.push(svg);
+    parent.appendChild(svg);
 
     for (const d of pathDs) {
       const path = document.createElementNS(SVG_NS, "path");
@@ -207,6 +303,7 @@ export class RiddleWriter {
   }
 
   private writeFallbackChar(
+    parent: HTMLElement,
     ch: string,
     x: number,
     y: number,
@@ -220,8 +317,7 @@ export class RiddleWriter {
     div.style.top = `${y}px`;
     div.style.fontSize = `${size * 0.92}px`;
     div.style.transform = `rotate(${rotate}deg)`;
-    this.layer.appendChild(div);
-    this.elements.push(div);
+    parent.appendChild(div);
     requestAnimationFrame(() => {
       (div as HTMLElement).style.opacity = "1";
     });
