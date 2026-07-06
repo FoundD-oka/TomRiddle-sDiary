@@ -19,6 +19,7 @@ export class InkCanvas {
   private readonly ctx: CanvasRenderingContext2D;
   strokes: Stroke[] = [];
   private current: Stroke | null = null;
+  private activePointerId: number | null = null;
   private dpr = 1;
   private lastP = 0.5;
 
@@ -32,10 +33,12 @@ export class InkCanvas {
 
     new ResizeObserver(() => this.syncSize()).observe(canvas);
 
-    canvas.addEventListener("pointerdown", (e) => this.down(e));
-    canvas.addEventListener("pointermove", (e) => this.move(e));
-    canvas.addEventListener("pointerup", (e) => this.up(e));
-    canvas.addEventListener("pointercancel", (e) => this.up(e));
+    const opts = { passive: false } as AddEventListenerOptions;
+    canvas.addEventListener("pointerdown", (e) => this.down(e), opts);
+    canvas.addEventListener("pointermove", (e) => this.move(e), opts);
+    canvas.addEventListener("pointerup", (e) => this.up(e), opts);
+    canvas.addEventListener("pointercancel", (e) => this.cancel(e), opts);
+    canvas.addEventListener("lostpointercapture", (e) => this.cancel(e), opts);
   }
 
   private syncSize() {
@@ -48,46 +51,124 @@ export class InkCanvas {
     this.redraw();
   }
 
+  private accepts(e: PointerEvent): boolean {
+    return e.pointerType === "pen" || e.pointerType === "mouse" || e.pointerType === "";
+  }
+
   private pOf(e: PointerEvent): number {
-    return e.pointerType === "mouse" ? 0.5 : e.pressure || 0.5;
+    if (e.pointerType === "mouse") return 0.5;
+    if (e.pressure > 0) return e.pressure;
+    if (e.buttons === 0) return 0.05;
+    return 0.5;
+  }
+
+  private ptOf(e: PointerEvent): Point {
+    const rect = this.canvas.getBoundingClientRect();
+    return {
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+      p: this.pOf(e),
+    };
+  }
+
+  private appendPoint(e: PointerEvent): boolean {
+    if (!this.current) return false;
+    const rp = this.pOf(e);
+    this.lastP = this.lastP * P_SMOOTH + rp * (1 - P_SMOOTH);
+    const pt = this.ptOf(e);
+    pt.p = this.lastP;
+    const prev = this.current[this.current.length - 1];
+    const dx = pt.x - prev.x;
+    const dy = pt.y - prev.y;
+    if (dx * dx + dy * dy < MIN_DIST_SQ) return false;
+    this.current.push(pt);
+    return true;
   }
 
   private down(e: PointerEvent) {
-    if (!e.isPrimary) return;
+    if (!this.accepts(e)) return;
+    if (this.activePointerId !== null) return;
     e.preventDefault();
-    this.canvas.setPointerCapture(e.pointerId);
+    this.activePointerId = e.pointerId;
+    try {
+      this.canvas.setPointerCapture(e.pointerId);
+    } catch {
+      // iPadOS Safari の境界条件で例外が出ても、描画自体は続ける。
+    }
     this.lastP = this.pOf(e);
-    this.current = [{ x: e.offsetX, y: e.offsetY, p: this.lastP }];
+    this.current = [this.ptOf(e)];
+    this.current[0].p = this.lastP;
     this.onStrokeStart?.();
   }
 
   private move(e: PointerEvent) {
     if (!this.current) return;
+    if (e.pointerId !== this.activePointerId) return;
     e.preventDefault();
     for (const ev of e.getCoalescedEvents?.() ?? [e]) {
-      const rp = this.pOf(ev);
-      this.lastP = this.lastP * P_SMOOTH + rp * (1 - P_SMOOTH);
-      const pt: Point = { x: ev.offsetX, y: ev.offsetY, p: this.lastP };
-      const prev = this.current[this.current.length - 1];
-      const dx = pt.x - prev.x;
-      const dy = pt.y - prev.y;
-      if (dx * dx + dy * dy < MIN_DIST_SQ) continue;
-      this.current.push(pt);
-      this.drawLiveSegment(this.current);
+      if (this.appendPoint(ev)) this.drawLiveSegment(this.current);
     }
   }
 
-  private up(_e: PointerEvent) {
+  private up(e: PointerEvent) {
+    if (e.pointerId !== this.activePointerId) return;
+    e.preventDefault();
+    this.finish(e, true);
+  }
+
+  private cancel(e: PointerEvent) {
+    if (e.pointerId !== this.activePointerId) return;
+    this.finish(e, false);
+  }
+
+  private finish(e: PointerEvent, addFinalPoint: boolean) {
     if (!this.current) return;
+    if (addFinalPoint && this.appendPoint(e)) {
+      this.drawLiveSegment(this.current);
+    }
     if (this.current.length > 1) {
       this.drawLastSegment(this.current);
       this.strokes.push(this.current);
+    } else if (this.current.length === 1) {
+      this.drawLiveDot(this.current[0]);
+      this.strokes.push(this.current);
+    }
+    try {
+      if (this.canvas.hasPointerCapture(e.pointerId)) {
+        this.canvas.releasePointerCapture(e.pointerId);
+      }
+    } catch {
+      // pointerup 後は暗黙解放済みの場合がある。
     }
     this.current = null;
+    this.activePointerId = null;
     this.onStrokeEnd?.();
   }
 
-  /** ストローク末端（最後の中間点→終点）だけ追加描画 */
+  private drawLiveDot(pt: Point) {
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    this.drawDot(ctx, pt, 1);
+    ctx.restore();
+  }
+
+  private drawDot(
+    ctx: CanvasRenderingContext2D,
+    pt: Point,
+    alpha: number,
+    blur = 0,
+  ) {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    if (blur > 0) ctx.filter = `blur(${blur.toFixed(2)}px)`;
+    ctx.fillStyle = INK_COLOR;
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, this.wAt(pt.p) / 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
   private drawLastSegment(s: Stroke) {
     const n = s.length;
     if (n < 3) return;
@@ -113,7 +194,6 @@ export class InkCanvas {
     return BASE_WIDTH * (0.25 + p * p * 1.8);
   }
 
-  /** リアルタイム描画: 最新セグメントだけ曲線で追加 */
   private drawLiveSegment(s: Stroke) {
     const n = s.length;
     if (n < 2) return;
@@ -142,7 +222,6 @@ export class InkCanvas {
     ctx.restore();
   }
 
-  /** ストローク全体を中間点法ベジェ曲線で描画 */
   private drawStrokeCurve(
     ctx: CanvasRenderingContext2D,
     s: Stroke,
@@ -150,6 +229,10 @@ export class InkCanvas {
     blur = 0,
   ) {
     const n = s.length;
+    if (n === 1) {
+      this.drawDot(ctx, s[0], alpha, blur);
+      return;
+    }
     if (n < 2) return;
     ctx.save();
     ctx.globalAlpha = alpha;
@@ -216,7 +299,6 @@ export class InkCanvas {
     this.redraw();
   }
 
-  /** ストロークをずらしながら、にじんで薄れて消えていく */
   fadeOut(): Promise<void> {
     const strokes = this.strokes;
     const perStrokeDelay = Math.min(120, 1400 / Math.max(strokes.length, 1));
@@ -252,7 +334,6 @@ export class InkCanvas {
     });
   }
 
-  /** ストローク部分を白背景 PNG として書き出し、base64(プレフィックスなし)を返す */
   capture(): string {
     const pad = 24;
     let minX = Infinity,
