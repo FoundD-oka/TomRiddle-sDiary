@@ -80,11 +80,33 @@ export class InkCanvas {
   private up(_e: PointerEvent) {
     if (!this.current) return;
     if (this.current.length > 1) {
+      this.drawLastSegment(this.current);
       this.strokes.push(this.current);
     }
     this.current = null;
-    this.redraw();
     this.onStrokeEnd?.();
+  }
+
+  /** ストローク末端（最後の中間点→終点）だけ追加描画 */
+  private drawLastSegment(s: Stroke) {
+    const n = s.length;
+    if (n < 3) return;
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    ctx.strokeStyle = INK_COLOR;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = this.wAt(s[n - 1].p);
+    ctx.beginPath();
+    ctx.moveTo(
+      (s[n - 2].x + s[n - 1].x) / 2,
+      (s[n - 2].y + s[n - 1].y) / 2,
+    );
+    ctx.lineTo(s[n - 1].x, s[n - 1].y);
+    ctx.stroke();
+    ctx.restore();
   }
 
   private wAt(p: number): number {
