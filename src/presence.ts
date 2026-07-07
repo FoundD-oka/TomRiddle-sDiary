@@ -1,5 +1,6 @@
 // トムが「読んでいる」気配 — 水に落ちた墨が渦を巻くインク(WebGL2 流体シミュ)。
-// 判定リクエスト中だけ、右下の隅で小さく渦巻く。
+// corner: 判定リクエスト中だけ、右下の隅で小さく渦巻く。
+// memory: 記憶シーンでページ全体を呑む大渦(振り付け・解像度が変わる)。
 // WebGL2 / 浮動小数レンダーターゲットが使えない環境では available=false になり、
 // 呼び出し側は従来の CSS の点にフォールバックする。
 
@@ -7,18 +8,42 @@ const INK = [0.149, 0.208, 0.361]; // #26355c
 // Beer–Lambert 的な吸収ベクトル(渦の内部の濃淡づけに使う)
 const INK_ABSORB = [1.85, 1.47, 0.81];
 
-// 「渦」パターンの振り付け。cycle ごとに再注入して気配を持続させる。
-const CYCLE = 6.0; // 秒: この間隔で渦へ墨を注ぎ足す(長め=落ち着いた気配)
-const START_DELAY = 550; // ミリ秒: 判定開始からこの分だけ遅れて渦が出はじめる
-const TIME_SCALE = 0.62; // 流体の進みを遅くして、ゆったり渦巻かせる
 interface SplatEvent {
   t: number; x: number; y: number; ang: number; fmul: number; r: number; ink?: number;
 }
-const VORTEX: SplatEvent[] = [
-  { t: 0.25, x: 0.5, y: 0.55, ang: 0.0, fmul: 0.3, r: 1.4 },
-  { t: 0.5, x: 0.43, y: 0.5, ang: Math.PI / 2, fmul: 0.3, r: 1.1 },
-  { t: 0.75, x: 0.57, y: 0.6, ang: -Math.PI / 2, fmul: 0.3, r: 1.1 },
-];
+// 「渦」パターンの振り付け。cycle 秒ごとに再注入して気配を持続させる。
+interface Choreo {
+  cycle: number; // 秒: この間隔で渦へ墨を注ぎ足す(長め=落ち着いた気配)
+  startDelay: number; // ミリ秒: start() からこの分だけ遅れて渦が出はじめる
+  timeScale: number; // 流体の進み。小さいほどゆったり渦巻く
+  events: SplatEvent[];
+}
+export type PresenceVariant = "corner" | "memory";
+
+// corner: 判定中に右下の隅で小さく渦巻く「読んでいる」気配
+const CORNER_CHOREO: Choreo = {
+  cycle: 6.0,
+  startDelay: 550,
+  timeScale: 0.62,
+  events: [
+    { t: 0.25, x: 0.5, y: 0.55, ang: 0.0, fmul: 0.3, r: 1.4 },
+    { t: 0.5, x: 0.43, y: 0.5, ang: Math.PI / 2, fmul: 0.3, r: 1.1 },
+    { t: 0.75, x: 0.57, y: 0.6, ang: -Math.PI / 2, fmul: 0.3, r: 1.1 },
+  ],
+};
+// memory: 記憶シーンでページ全体を呑む大渦
+const MEMORY_CHOREO: Choreo = {
+  cycle: 4.6,
+  startDelay: 0,
+  timeScale: 0.8,
+  events: [
+    { t: 0.2, x: 0.5, y: 0.5, ang: 0.0, fmul: 0.5, r: 2.6 },
+    { t: 0.45, x: 0.42, y: 0.46, ang: Math.PI / 2, fmul: 0.45, r: 1.8 },
+    { t: 0.7, x: 0.58, y: 0.55, ang: -Math.PI / 2, fmul: 0.45, r: 1.8 },
+    { t: 1.1, x: 0.5, y: 0.6, ang: Math.PI, fmul: 0.35, r: 1.5 },
+    { t: 1.6, x: 0.47, y: 0.42, ang: -Math.PI / 4, fmul: 0.3, r: 1.3, ink: 0.8 },
+  ],
+};
 
 const baseVert = `#version 300 es
 precision highp float;
@@ -164,6 +189,8 @@ export class PresenceInk {
     PRESSURE: 0.8, PRESSURE_ITERATIONS: 20, CURL: 40, SPLAT_RADIUS: 0.0030,
     SPLAT_FORCE: 3800, INK: 1.15,
   };
+  private choreo: Choreo = CORNER_CHOREO;
+  private baseDissipation = 0.34;
 
   private state: "idle" | "active" | "fading" = "idle";
   private raf = 0;
@@ -175,8 +202,17 @@ export class PresenceInk {
   private begun = false;   // 遅延後、実際に渦を出し始めたか
   private beginAt = 0;     // 渦を出し始める時刻
 
-  constructor(canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement, variant: PresenceVariant = "corner") {
     this.canvas = canvas;
+    if (variant === "memory") {
+      this.choreo = MEMORY_CHOREO;
+      // フルスクリーンで見応えが出るよう、解像度と勢いを上げる
+      Object.assign(this.config, {
+        SIM_RES: 88, DYE_RES: 448, SPLAT_RADIUS: 0.004,
+        SPLAT_FORCE: 4600, INK: 1.05, CURL: 44, DENSITY_DISSIPATION: 0.28,
+      });
+      this.baseDissipation = this.config.DENSITY_DISSIPATION;
+    }
     this.dpr = Math.min(window.devicePixelRatio || 1, 2);
     const gl = canvas.getContext("webgl2", {
       alpha: true, depth: false, stencil: false, antialias: false,
@@ -397,7 +433,7 @@ export class PresenceInk {
     if (!this.available) return;
     if (this.state === "idle") { this.rinse(); this.globalAlpha = 0; this.begun = false; }
     this.state = "active";
-    this.beginAt = performance.now() + START_DELAY;
+    this.beginAt = performance.now() + this.choreo.startDelay;
     this.fired.clear();
     if (!this.raf) { this.last = performance.now(); this.raf = requestAnimationFrame(this.loop); }
   }
@@ -428,19 +464,20 @@ export class PresenceInk {
       }
       this.globalAlpha = Math.min(1, this.globalAlpha + dt / 1.1); // 1.1秒でゆっくり出現
       let lt = (now - this.cycleStart) / 1000;
-      if (lt >= CYCLE) { this.cycleStart = now; this.fired.clear(); lt = 0; }
-      for (let i = 0; i < VORTEX.length; i++) {
-        if (!this.fired.has(i) && lt >= VORTEX[i].t) { this.fired.add(i); this.splat(VORTEX[i]); }
+      if (lt >= this.choreo.cycle) { this.cycleStart = now; this.fired.clear(); lt = 0; }
+      const events = this.choreo.events;
+      for (let i = 0; i < events.length; i++) {
+        if (!this.fired.has(i) && lt >= events[i].t) { this.fired.add(i); this.splat(events[i]); }
       }
-      this.step(dt * TIME_SCALE);
+      this.step(dt * this.choreo.timeScale);
       this.render();
     } else if (this.state === "fading") {
       this.globalAlpha = Math.max(0, this.globalAlpha - dt / 0.9); // 0.9秒で消える
-      this.step(dt * TIME_SCALE);
+      this.step(dt * this.choreo.timeScale);
       this.render();
       if (now >= this.fadeUntil) {
         this.state = "idle";
-        this.config.DENSITY_DISSIPATION = 0.34;
+        this.config.DENSITY_DISSIPATION = this.baseDissipation;
         this.rinse();
         this.globalAlpha = 0;
         this.begun = false;

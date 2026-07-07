@@ -35,6 +35,23 @@ body {
   mix-blend-mode: multiply;
 }
 
+/* 冷たい光 — 映画のあのシーンの、青暗い部屋の色温度。ゆっくり呼吸する */
+#cold-light {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse at 50% 28%, rgba(150, 175, 225, 0.10), rgba(0, 0, 0, 0) 60%),
+    linear-gradient(180deg, rgba(30, 42, 78, 0.05), rgba(16, 22, 44, 0.14));
+  mix-blend-mode: multiply;
+  animation: cold-breathe 11s ease-in-out infinite;
+}
+
+@keyframes cold-breathe {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
 #ink {
   position: absolute;
   inset: 0;
@@ -60,6 +77,11 @@ body {
 #reply-layer .fallback-char {
   position: absolute;
   overflow: visible;
+}
+
+/* トムの文字の輪郭を、紙の繊維へわずかににじませる */
+#reply-layer svg {
+  filter: url(#ink-bleed);
 }
 
 #reply-layer .fallback-char {
@@ -117,4 +139,56 @@ body {
 @keyframes breathe {
   0%, 100% { transform: scale(1); }
   50% { transform: scale(2.2); }
+}
+
+/* ページ周縁のビネット(周辺減光)。紙が闇に沈み込んでいる感じ */
+#vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 50% 45%, rgba(0, 0, 0, 0) 52%, rgba(14, 17, 34, 0.38) 100%);
+}
+
+/* ページがインクを受け付けなかったとき(通信エラー)の、冷たい明滅。
+   ダイアログは出さない — すべて日記の中の出来事として伝える */
+#reject-flash {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(ellipse at 50% 50%, rgba(10, 13, 28, 0) 35%, rgba(7, 9, 22, 0.55) 100%);
+}
+
+#reject-flash.active {
+  animation: reject-pulse 1.4s ease;
+}
+
+@keyframes reject-pulse {
+  0% { opacity: 0; }
+  30% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* 記憶シーンの帳。ページ全体が冷たい闇に沈む */
+#memory-veil {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(ellipse at 50% 50%, rgba(10, 13, 28, 0.86) 0%, rgba(4, 6, 15, 0.97) 100%);
+  transition: opacity 2.4s ease;
+}
+
+#memory-veil.full { opacity: 1; }
+#memory-veil.half { opacity: 0.55; }
+
+/* 記憶シーンでページ全体を呑む大渦 */
+#memory-ink {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+  visibility: hidden;
 }
