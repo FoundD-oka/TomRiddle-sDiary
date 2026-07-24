@@ -35,6 +35,7 @@ export interface WriteOptions {
   intimacy?: number; // 0..1 会話が進むほど筆が馴れ馴れしくなる
   ink?: string; // インク色の上書き(記憶シーンでは蒼白く)
   sizeMul?: number;
+  startYFrac?: number; // 書き出しの縦位置(高さ比 0..1)。註釈は下寄せにする
 }
 
 function clamp(v: number, min: number, max: number): number {
@@ -141,7 +142,7 @@ export class RiddleWriter {
 
     const left = W * 0.1;
     const right = W * 0.9;
-    const topY = H * 0.16;
+    const topY = H * (opts.startYFrac ?? 0.16);
 
     // ノイズの読み出し位置。返事ごとに別の場所から読み、同じ呼吸を繰り返さない
     let nt = Math.random() * 500;
@@ -322,6 +323,12 @@ export class RiddleWriter {
     requestAnimationFrame(() => {
       div.style.opacity = "1";
     });
+  }
+
+  /** 書いた文字を即座に消す(ページめくり=クリア用。演出なし)。 */
+  clear() {
+    for (const el of this.elements) el.remove();
+    this.elements = [];
   }
 
   async fadeOut(): Promise<void> {

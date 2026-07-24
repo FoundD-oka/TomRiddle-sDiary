@@ -8,6 +8,12 @@
 //                                          ▼
 //                                        記憶シーン(闇の帳→大渦→蒼白いインクの返事)
 //
+// ペンの色でモードが変わる:
+//   墨(sumi): 上のとおり。書いた字は吸い込まれ、トムが返事する
+//   朱(shu) : 書いた字は残り、余白に註釈(補足解説)が書き添えられる(消えない)
+//
+// ページの左右端をタップすると新しい白紙へ。めくり＝クリア(手書きも履歴も残さない)。
+//
 // UI の原則: ダイアログもスピナーも出さない。通信中は「気配」、エラーは
 // 「ページがインクを弾く」——すべて日記の中の出来事として伝える。
 import "./style.css";
@@ -20,11 +26,14 @@ import {
 import { PresenceInk } from "./presence";
 import { Signature } from "./signature";
 import { SoundScape } from "./sound";
+import { InkWell, PEN_COLORS, type PenMode } from "./inkwell";
+import { PageTurn } from "./pageturn";
 
 const IDLE_MS = 4200; // ペンが離れてから「書き終わり」とみなすまで。
 // 短すぎると、書いてる途中で少し考えただけで AI 判定が走り、次のストローク開始と
 // ぶつかって書き心地が乱れる。メモ.app 的な書き味を優先して長めにとる。
 const REPLY_LINGER_MIN_MS = 7000; // 返事を読ませる最低時間(長文は文字数で伸びる)
+const ANNOTATION_INK = "#1a2744"; // 朱モードで日記が書き添える註釈の色(紺)
 
 interface Exchange {
   user: string;
@@ -56,6 +65,15 @@ const signature = new Signature(
 );
 const ink = new InkCanvas(document.getElementById("ink") as HTMLCanvasElement);
 
+// ペンの色＝モード。既定は墨。
+let penMode: PenMode = "sumi";
+ink.setColor(PEN_COLORS.sumi);
+const inkwell = new InkWell(document.getElementById("inkwells")!);
+inkwell.onChange = (mode, color) => {
+  penMode = mode;
+  ink.setColor(color);
+};
+
 // iOS の自動再生制限: 音はユーザーの最初のタッチで解錠する
 page.addEventListener("pointerdown", () => sound.unlock());
 
@@ -77,8 +95,25 @@ const writer = new RiddleWriter(
 const history: Exchange[] = [];
 let idleTimer: number | null = null;
 let judging = false; // LLM 判定リクエスト中
-let possessed = false; // トムが答えている最中(入力ロック)
+let possessed = false; // トム/日記が書いている最中(入力ロック)
 let memoryShown = false; // 記憶シーンはセッションに1度だけ
+
+// ページめくり=クリア。トムが書いている/読んでいる間はめくれない。
+const pageTurn = new PageTurn(
+  page,
+  document.getElementById("edge-left")!,
+  document.getElementById("edge-right")!,
+  () => ink.snapshot(),
+);
+pageTurn.canFlip = () => !possessed && !judging;
+pageTurn.onFlip = () => {
+  cancelJudge();
+  hidePresence();
+  ink.clear();
+  writer.clear();
+  signature.fadeOut();
+  history.length = 0;
+};
 
 function wait(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -114,7 +149,7 @@ function diegeticReject() {
 }
 
 async function onIdle() {
-  if (judging || possessed || ink.strokes.length === 0) return;
+  if (judging || possessed || ink.strokeCount === 0) return;
   // ペンが接地している間は判定を始めない(キャプチャの割り込みで書き味が乱れる)
   if (ink.isDrawing) {
     scheduleJudge();
@@ -123,7 +158,8 @@ async function onIdle() {
   judging = true;
   showPresence(); // 「誰かが読んでいる」気配
 
-  const strokeCountAtCapture = ink.strokes.length;
+  const mode = penMode; // この判定を始めた時点のモードで一貫して扱う
+  const strokeCountAtCapture = ink.strokeCount;
   const revisionAtCapture = ink.inputRevision;
   try {
     const image = await ink.captureAsync();
@@ -132,7 +168,7 @@ async function onIdle() {
     if (
       ink.isDrawing ||
       ink.inputRevision !== revisionAtCapture ||
-      ink.strokes.length !== strokeCountAtCapture
+      ink.strokeCount !== strokeCountAtCapture
     ) {
       judging = false;
       hidePresence();
@@ -143,7 +179,7 @@ async function onIdle() {
     const res = await fetch("/api/riddle", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ image, history }),
+      body: JSON.stringify({ image, history, mode }),
     });
     if (!res.ok) throw new Error(`server ${res.status}`);
     const result: RiddleResult = await res.json();
@@ -151,7 +187,7 @@ async function onIdle() {
     // 判定中にユーザーが書き足していたら、この判定は破棄してやり直す
     if (
       ink.inputRevision !== revisionAtCapture ||
-      ink.strokes.length !== strokeCountAtCapture
+      ink.strokeCount !== strokeCountAtCapture
     ) {
       judging = false;
       hidePresence();
@@ -166,7 +202,7 @@ async function onIdle() {
       return;
     }
 
-    await possess(result);
+    await possess(result, mode);
   } catch (err) {
     console.error("[diary]", err);
     diegeticReject();
@@ -176,24 +212,42 @@ async function onIdle() {
   }
 }
 
-/** トムがページを乗っ取る: ロック → インク吸収 → (記憶シーン) → 署名 → 演出スクリプトで返事 */
-async function possess(result: RiddleResult) {
+/**
+ * 日記がページを乗っ取る。
+ *   墨: ロック → インク吸収(字が消える) → (記憶シーン) → 署名 → 演出スクリプトで返事 → 返事も消える
+ *   朱: ロック → 字は消さず、余白に註釈を朱筆のように書き添える(消えない) → 解除
+ */
+async function possess(result: RiddleResult, mode: PenMode) {
   possessed = true;
   page.classList.add("locked");
   cancelJudge();
   hidePresence(); // 気配(渦)は役目を終えて紙の奥へ引いていく
 
   await wait(500); // 一拍の間
+
+  const script =
+    result.script && result.script.length > 0
+      ? result.script
+      : fallbackScript(result.reply);
+
+  if (mode === "shu") {
+    // 朱モード: 書いた字は残す。署名も記憶シーンもなし。
+    // 余白(下寄せ)に註釈を書き添え、そのまま残す(ページをめくるまで消えない)。
+    sound.sustainedScratch(1600);
+    await writer.write(script, { sizeMul: 0.82, startYFrac: 0.6 });
+    // 朱モードの一問一答はトムの会話記憶(history)には積まない。
+    page.classList.remove("locked");
+    possessed = false;
+    return;
+  }
+
+  // 墨モード（既存のトム・リドル）
   sound.absorb();
   await ink.fadeOut(); // 書いたものが紙に吸い込まれる
   await wait(600);
 
   // 会話が進むほどトムの筆は馴れ馴れしくなる(文字が大きく、間が詰まり、傾きが大胆に)
   const intimacy = Math.min(history.length / 8, 1);
-  const script =
-    result.script && result.script.length > 0
-      ? result.script
-      : fallbackScript(result.reply);
 
   // 隠しイベント: 使用者が日記の核心へ踏み込んだとき、1度だけ記憶を「見せる」
   const isMemory = result.memory === true && !memoryShown;

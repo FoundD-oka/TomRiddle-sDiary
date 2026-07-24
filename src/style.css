@@ -192,3 +192,195 @@ body {
   pointer-events: none;
   visibility: hidden;
 }
+
+/* ページめくりの 3D 遠近 */
+#page {
+  perspective: 2400px;
+}
+
+/* ── 対の溜まり（ペンの色＝モード選択） ── */
+#inkwells {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: clamp(40px, 12vw, 72px);
+  z-index: 20;
+}
+.dip {
+  position: relative;
+  width: clamp(58px, 15vw, 76px);
+  aspect-ratio: 1;
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.dip .pool {
+  position: absolute;
+  inset: 0;
+  transform: scale(1);
+  transition: transform 1.1s cubic-bezier(0.34, 0.02, 0.2, 1);
+  will-change: transform;
+}
+/* 使用中＝インクが引かれて溜まりが小さくなる */
+.dip.in-use .pool {
+  transform: scale(0.5);
+}
+.pool-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: visible;
+  /* 紙に染み込んで見えるよう、羊皮紙に対して乗算合成する */
+  mix-blend-mode: multiply;
+}
+.dip .tag {
+  position: absolute;
+  left: 50%;
+  bottom: -15px;
+  transform: translateX(-50%);
+  font-family: "Hiragino Mincho ProN", "Yu Mincho", serif;
+  font-size: 13px;
+  letter-spacing: 0.14em;
+  color: #2a2110;
+  opacity: 0.5;
+  pointer-events: none;
+  transition: opacity 0.5s ease;
+}
+.dip.in-use .tag {
+  opacity: 1;
+}
+.dip:focus-visible {
+  outline: none;
+}
+.dip:focus-visible .tag {
+  opacity: 1;
+  color: #9a3225;
+}
+#page.locked #inkwells {
+  pointer-events: none;
+}
+
+/* ── 左右端: なぞると新しい白紙へ（見た目なし・判定のみ） ── */
+.edge {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7%;
+  min-width: 32px;
+  max-width: 68px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  z-index: 15;
+  -webkit-tap-highlight-color: transparent;
+}
+.edge-left {
+  left: 0;
+}
+.edge-right {
+  right: 0;
+}
+.edge:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px rgba(255, 252, 244, 0.4);
+}
+/* トム/日記が書いている間はめくれない */
+#page.locked .edge {
+  pointer-events: none;
+}
+
+/* ── ページめくりの紙葉 ── */
+.leaf {
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
+  transform-style: preserve-3d;
+  z-index: 50;
+  will-change: transform;
+}
+.leaf__front,
+.leaf__back {
+  position: absolute;
+  inset: 0;
+  backface-visibility: hidden;
+  overflow: hidden;
+  /* めくれる紙も羊皮紙 */
+  background:
+    radial-gradient(ellipse at 50% 40%, rgba(255, 250, 235, 0.55), rgba(0, 0, 0, 0) 70%),
+    radial-gradient(ellipse at 50% 50%, #f2e8d0 0%, #e8dab8 55%, #d4c096 85%, #b8a172 100%);
+  box-shadow: 0 24px 42px -22px rgba(0, 0, 0, 0.7);
+}
+.leaf__front img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  pointer-events: none;
+}
+.leaf__back {
+  transform: rotateY(180deg);
+  background: linear-gradient(160deg, #e6d7b3, #d9c8a0 55%, #c9b485);
+}
+/* 紙面を転がる光（曲面の艶） */
+.leaf__sheen {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  mix-blend-mode: soft-light;
+  background: linear-gradient(
+    102deg,
+    rgba(255, 255, 255, 0) 34%,
+    rgba(255, 255, 255, 0.5) 50%,
+    rgba(120, 95, 55, 0.22) 58%,
+    rgba(0, 0, 0, 0) 72%
+  );
+}
+.leaf--fwd {
+  animation: leafFwd 1.1s cubic-bezier(0.36, 0.05, 0.18, 1) forwards;
+}
+.leaf--fwd .leaf__sheen {
+  animation: sheenFwd 1.1s cubic-bezier(0.36, 0.05, 0.18, 1) forwards;
+}
+.leaf--back {
+  transform-origin: right center;
+  animation: leafBack 1.1s cubic-bezier(0.36, 0.05, 0.18, 1) forwards;
+}
+.leaf--back .leaf__sheen {
+  background: linear-gradient(
+    258deg,
+    rgba(255, 255, 255, 0) 34%,
+    rgba(255, 255, 255, 0.5) 50%,
+    rgba(120, 95, 55, 0.22) 58%,
+    rgba(0, 0, 0, 0) 72%
+  );
+  animation: sheenBack 1.1s cubic-bezier(0.36, 0.05, 0.18, 1) forwards;
+}
+@keyframes leafFwd {
+  from { transform: rotateY(0deg); }
+  to { transform: rotateY(-179deg); }
+}
+@keyframes leafBack {
+  from { transform: rotateY(0deg); }
+  to { transform: rotateY(179deg); }
+}
+@keyframes sheenFwd {
+  0% { opacity: 0; transform: translateX(26%); }
+  26% { opacity: 1; }
+  100% { opacity: 0.35; transform: translateX(-58%); }
+}
+@keyframes sheenBack {
+  0% { opacity: 0; transform: translateX(-26%); }
+  26% { opacity: 1; }
+  100% { opacity: 0.35; transform: translateX(58%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dip .pool { transition: none; }
+  .leaf { display: none; }
+}
