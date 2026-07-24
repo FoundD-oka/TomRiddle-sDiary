@@ -19,12 +19,37 @@
       <div id="reject-flash"></div>
       <div id="memory-veil"></div>
       <canvas id="memory-ink"></canvas>
+
+      <!-- 対の溜まり: ペンの色＝モードを選ぶ。使用中は溜まりが小さくなる。 -->
+      <div id="inkwells" aria-label="ペンの色">
+        <button class="dip in-use" data-ink="sumi" aria-label="会話（書いた字は日記へ吸い込まれ、返事が来る）">
+          <span class="pool"></span><span class="tag">会話</span>
+        </button>
+        <button class="dip" data-ink="shu" aria-label="解説（書いた字は残り、補足解説が書き添えられる）">
+          <span class="pool"></span><span class="tag">解説</span>
+        </button>
+      </div>
+
+      <!-- 左右端: なぞると新しい白紙へ（めくり＝クリア） -->
+      <button class="edge edge-left" id="edge-left" aria-label="新しい紙へ"></button>
+      <button class="edge edge-right" id="edge-right" aria-label="新しい紙へ"></button>
     </div>
-    <!-- トムの文字の輪郭を紙の繊維へにじませる SVG フィルタ -->
+    <!-- トムの文字の輪郭を紙の繊維へにじませる／インク溜まりを紙へ滲ませる SVG フィルタ -->
     <svg width="0" height="0" style="position:absolute" aria-hidden="true">
       <filter id="ink-bleed" x="-20%" y="-20%" width="140%" height="140%">
         <feTurbulence type="fractalNoise" baseFrequency="0.055" numOctaves="2" seed="7" />
         <feDisplacementMap in="SourceGraphic" scale="1.7" />
+      </filter>
+      <!-- インク溜まり「かすれ」: 荒れた輪郭＋にじむハロー -->
+      <filter id="poolDry" x="-70%" y="-70%" width="240%" height="240%">
+        <feTurbulence type="fractalNoise" baseFrequency="0.055" numOctaves="3" seed="13" result="n" />
+        <feDisplacementMap in="SourceGraphic" in2="n" scale="22" />
+        <feGaussianBlur stdDeviation="0.7" />
+      </filter>
+      <filter id="poolHalo" x="-90%" y="-90%" width="280%" height="280%">
+        <feTurbulence type="fractalNoise" baseFrequency="0.014" numOctaves="2" seed="11" result="n" />
+        <feDisplacementMap in="SourceGraphic" in2="n" scale="24" />
+        <feGaussianBlur stdDeviation="9" />
       </filter>
     </svg>
     <script type="module" src="/src/main.ts"></script>

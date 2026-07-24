@@ -29,6 +29,35 @@ memory: 使用者が日記の過去の核心(50年前の出来事、秘密の部
 
 transcript には画像から読み取った内容の短い要約を書く(会話の記録用。読めなければ「判読不能」と書く)。`;
 
+// 朱モード: トムを演じず、書かれた内容に淡々と補足解説(註釈)を書き添える註釈者。
+const SYSTEM_SHU = `あなたは古い魔法の日記の余白に註釈を書き添える、物静かな註釈者だ。使用者が朱のペンで書いた手書きに対し、日記そのものが知識を書き足す。
+
+送られてくる画像は、日記のページに使用者が朱で手書きした文字や絵である。
+
+まず内容を判定せよ:
+- 書きかけの文、無意味な走り書き、判読不能な線 → ready: false(reply と script は空にする)
+- 意味の取れる語・文・質問・名前・絵 → ready: true
+
+ready: true のとき、書かれた内容への「補足解説(註釈)」を書く:
+- 書かれた語や事柄に関する、役立つ背景・豆知識・関連情報を簡潔に添える。質問ならその答えや手がかりを短く示す。
+- 人格や物語を演じない。淡々とした学識ある註の口調で書く(トム・リドルとして振る舞わない)。
+- 日本語で書く。全体で80文字以内、1〜3文。適度に改行してよい。
+- 絵が描かれていたら、その対象に関する註を添える。
+- 絵文字や記号装飾は使わない。日記の余白に手書きされる註のように自然な文体にする。
+
+さらに、註釈を「どう書くか」の演出スクリプト script を作る。reply を文節〜短い句に区切り(順に連結すると reply 全文と一致させる)、各要素に:
+- text: その句
+- pause: 書き始める前の「間」(ミリ秒 0〜1200)。書き出しは400前後。
+- speed: 筆速 0.6〜1.4。
+- size: 文字の大きさ 0.85〜1.25。
+- emphasis: 特に強調する句だけ true。全体で0〜1箇所に留める。
+
+memory は必ず false にする。transcript には画像から読み取った内容の短い要約を書く(読めなければ「判読不能」と書く)。`;
+
+function systemFor(mode) {
+  return mode === "shu" ? SYSTEM_SHU : SYSTEM;
+}
+
 const OUTPUT_SCHEMA = {
   type: "json_schema",
   schema: {
@@ -86,18 +115,22 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { image, history = [] } = req.body ?? {};
+    const { image, history = [], mode = "sumi" } = req.body ?? {};
     if (!image) {
       return res.status(400).json({ error: "image (base64 PNG) is required" });
     }
+    const penMode = mode === "shu" ? "shu" : "sumi";
 
     const messages = [];
-    for (const h of history.slice(-12)) {
-      messages.push({
-        role: "user",
-        content: `(日記のページに書かれた内容) ${h.user}`,
-      });
-      messages.push({ role: "assistant", content: h.riddle });
+    // 朱(註釈)モードは一問一答。会話履歴は文脈に含めない。
+    if (penMode === "sumi") {
+      for (const h of history.slice(-12)) {
+        messages.push({
+          role: "user",
+          content: `(日記のページに書かれた内容) ${h.user}`,
+        });
+        messages.push({ role: "assistant", content: h.riddle });
+      }
     }
     messages.push({
       role: "user",
@@ -106,7 +139,13 @@ export default async function handler(req, res) {
           type: "image",
           source: { type: "base64", media_type: "image/png", data: image },
         },
-        { type: "text", text: "(いま日記のページに書かれている内容)" },
+        {
+          type: "text",
+          text:
+            penMode === "shu"
+              ? "(いま日記のページに朱で書かれている内容)"
+              : "(いま日記のページに書かれている内容)",
+        },
       ],
     });
 
@@ -114,7 +153,11 @@ export default async function handler(req, res) {
       model: "claude-opus-4-8",
       max_tokens: 2048,
       system: [
-        { type: "text", text: SYSTEM, cache_control: { type: "ephemeral" } },
+        {
+          type: "text",
+          text: systemFor(penMode),
+          cache_control: { type: "ephemeral" },
+        },
       ],
       messages,
       output_config: { format: OUTPUT_SCHEMA },
